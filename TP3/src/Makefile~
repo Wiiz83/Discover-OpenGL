@@ -1,0 +1,31 @@
+CPP = g++
+COMPILOPTS = -g
+LIBLINKX11 = -L/usr/lib/i386-linux-gnu -lpthread -lX11
+LIBLINK = -L. -llib_image $(LIBLINKX11)
+EXECUTABLES = filtre_contour_gris transformee_hough
+
+#====================================#
+# création de la librairie lib_image #
+#------------------------------------#
+lib_image : lib_image.cpp lib_image.hpp CImg.h
+	$(CPP) -c lib_image.cpp
+	ar -q liblib_image.a lib_image.o
+
+#=========================================================#
+# règle de compilation d'un programme utilisant lib_image #
+#---------------------------------------------------------#
+filtre_contour_gris : filtre_contour_gris.cpp 
+	$(CPP) $(COMPILOPTS) $<  $(LIBLINK) -o $@
+
+transformee_hough : transformee_hough.cpp
+	$(CPP) $(COMPILOPTS) $< $(LIBLINK) -o $@
+
+traitement_complet : traitement_complet.cpp
+	$(CPP) $(COMPILOPTS) $< $(LIBLINK) -o $@
+
+#--------------------------------------------------------------
+# autres commandes
+
+clean :
+	rm -rf $(EXECUTABLES) *.o
+

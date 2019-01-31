@@ -1,0 +1,853 @@
+#include "lib_image.hpp"
+#include <cstdio>
+#include <cstdlib>
+#include <cmath>
+#include <vector>
+#include <algorithm>
+
+using namespace std;
+
+
+//////////////////////////////////////////////////////////////////////////////////
+//										//							
+//										//
+//	 	  Detection des contours par filtrage				//
+//										//
+//										//
+//////////////////////////////////////////////////////////////////////////////////
+
+
+// fonction valeur absolue
+ImageGrisF abs(ImageGrisF &I1)
+{
+	UINT L = I1.largeur();
+	UINT H = I1.hauteur();
+	ImageGrisF Ires(L,H);
+	for (UINT i=0; i<L*H; i++)
+		Ires(i) = fabsf(I1(i));
+	return Ires;
+}
+
+// fonction puissance
+ImageGrisF pow(ImageGrisF &I1, float p)
+{
+	UINT L = I1.largeur();
+	UINT H = I1.hauteur();
+	ImageGrisF Ires(L,H);
+	for (UINT i=0; i<L*H; i++)
+		Ires(i) = powf(I1(i), p);
+	return Ires;
+}
+
+// fonction racine carree
+ImageGrisF sqrt(ImageGrisF &I1)
+{
+	UINT L = I1.largeur();
+	UINT H = I1.hauteur();
+	ImageGrisF Ires(L,H);
+	for (UINT i=0; i<L*H; i++)
+		Ires(i) = sqrt(I1(i));
+	return Ires;
+}
+
+// operateur +
+ImageGrisF operator+(ImageGrisF &I1, ImageGrisF &I2)
+{
+	UINT L = I1.largeur();
+	UINT H = I1.hauteur();
+	ImageGrisF Ires(L,H);
+	for (UINT i=0; i<L*H; i++)
+		Ires(i) = I1(i)+I2(i);
+	return Ires;
+}
+
+// fonction max
+ImageGrisF max(ImageGrisF &I1, ImageGrisF &I2)
+{
+	UINT L = I1.largeur();
+	UINT H = I1.hauteur();
+	ImageGrisF Ires(L,H);
+	for (UINT i=0; i<L*H; i++)
+		Ires(i) = I1(i)<I2(i) ? I2(i) : I1(i);
+	return Ires;
+}
+
+// operateur +=
+ImageGrisF operator+=(ImageGrisF &I1, ImageGrisF &I2)
+{
+	UINT L = I1.largeur();
+	UINT H = I1.hauteur();
+	for (UINT i=0; i<L*H; i++)
+		I1(i) += I2(i);
+	return I1;
+}
+
+// operateur * par un réel
+ImageGrisF operator*(ImageGrisF &I1, float a)
+{
+	UINT L = I1.largeur();
+	UINT H = I1.hauteur();
+	ImageGrisF Ires(L,H);
+	for (UINT i=0; i<L*H; i++)
+		Ires(i) = I1(i)*a;
+	return Ires;
+}
+
+ImageGrisF operator*(float a, ImageGrisF &I1)
+{
+	UINT L = I1.largeur();
+	UINT H = I1.hauteur();
+	ImageGrisF Ires(L,H);
+	for (UINT i=0; i<L*H; i++)
+		Ires(i) = I1(i)*a;
+	return Ires;
+}
+
+// operateur *= par un réel
+ImageGrisF operator*=(ImageGrisF &I1, float a)
+{
+	UINT L = I1.largeur();
+	UINT H = I1.hauteur();
+	for (UINT i=0; i<L*H; i++)
+		I1(i) *= a;
+	return I1;
+}
+//////////////////////////////////////////////////////////////////////////////
+// classe FiltreLineaire :
+//   définition de filtres linéaires
+//   trois types de filtres prédéfinis :
+//     FiltreLineaire::Moyenne 
+//     FiltreLineaire::Chapeau 
+//     FiltreLineaire::Gaussien
+//////////////////////////////////////////////////////////////////////////////
+class FiltreLineaire
+{
+	int n; // taille du filtre --> dimension (2n+1) * (2n+1)
+	float *T; // tableau contenant les valeurs du filtre
+	
+	// initialiser le tableau T avec les 9 valeurs a0*r,...,a8*r
+	void init_tab9(float a0, float a1, float a2
+	             , float a3, float a4, float a5
+	             , float a6, float a7, float a8, float r = 1.0)
+	{
+		T[0] = a0*r; T[1] = a1*r; T[2] = a2*r; 
+		T[3] = a3*r; T[4] = a4*r; T[5] = a5*r; 
+		T[6] = a6*r; T[7] = a7*r; T[8] = a8*r; 
+	}
+
+	// creer un filtre moyenne de taille n
+	void filtre_moyenne()
+	{
+		UINT p=0;
+		float v = 1.0/(float)((2*n+1)*(2*n+1));
+		for (int i=-n; i<=n; i++)
+		for (int j=-n; j<=n; j++)
+		{
+			T[p++] = v;
+		}
+	}
+
+	// creer un filtre chapeau de taille n
+	void filtre_chapeau()
+	{
+		UINT p=0;
+		float v = 1.0/powf((float)(n+1),4.0);
+		for (int i=-n; i<=n; i++)
+		for (int j=-n; j<=n; j++)
+		{
+			T[p++] = v*(n+1-fabsf(i))*(n+1-fabsf(j));
+		}
+	}
+
+	// creer un filtre gaussien de taille n
+	void filtre_gaussien()
+	{
+		UINT p=0;
+		float s = 0.0;
+		float a = (float)(n*n)/3.0;
+		for (int i=-n; i<=n; i++)
+		for (int j=-n; j<=n; j++)
+		{
+			s += T[p++] = exp((float)(-i*i-j*j)/a);
+		}
+		
+		// normalisation
+		for (p=0; p<(2*n+1)*(2*n+1); p++)
+			T[p] /= s;
+	}
+
+public :
+	static const int Moyenne  = 1;
+	static const int Chapeau  = 2;
+	static const int Gaussien = 3;
+	static const int DeriveeN  = 10;
+	static const int DeriveeS  = 11;
+	static const int DeriveeE  = 12;
+	static const int DeriveeW  = 13;
+	static const int DeriveeNE = 14;
+	static const int DeriveeSE = 15;
+	static const int DeriveeNW = 16;
+	static const int DeriveeSW = 17;
+	static const int PrewittN_S   = 20;
+	static const int PrewittE_W   = 21;
+	static const int PrewittNE_SW = 22;
+	static const int PrewittNW_SE = 23;
+	static const int SobelN_S   = 30;
+	static const int SobelE_W   = 31;
+	static const int SobelNE_SW = 32;
+	static const int SobelNW_SE = 33;
+	
+	// crée un filtre de taille 0
+	FiltreLineaire()
+	{
+		n = 0;
+		T = new float[1];
+		T[0] = 1.0;
+	}
+	
+	// crée un filtre de taille n0 suivant le type t
+	FiltreLineaire(int n0, int type_filtre)
+	{
+		if (n0<0) n0=-n0;
+		n = n0;
+		UINT N = (2*n+1)*(2*n+1);
+		T = new float[N];
+		switch (type_filtre)
+		{
+			case Chapeau  : filtre_chapeau();  break;
+			case Gaussien : filtre_gaussien(); break;
+			default       : filtre_moyenne();  break;
+		}
+	}
+	
+	// crée un filtre de taille 1 (3x3) suivant le type t
+	FiltreLineaire(int type_filtre)
+	{
+		n = 1;
+		UINT N = 9;
+		T = new float[N];
+		switch (type_filtre)
+		{
+			case DeriveeN  :
+				init_tab9( 0,-1, 0, 0, 1, 0, 0, 0, 0); break;
+			case DeriveeS  :
+				init_tab9( 0, 0, 0, 0, 1, 0, 0,-1, 0); break;
+			case DeriveeE  :
+				init_tab9( 0, 0, 0, 0, 1,-1, 0, 0, 0); break;
+			case DeriveeW  :
+				init_tab9( 0, 0, 0,-1, 1, 0, 0, 0, 0); break;
+			case DeriveeNE :
+				init_tab9( 0, 0, 0, 0, 1, 0,-1, 0, 0); break;
+			case DeriveeSE :
+				init_tab9( 0, 0, 0, 0, 1, 0, 0, 0,-1); break;
+			case DeriveeNW :
+				init_tab9(-1, 0, 0, 0, 1, 0, 0, 0, 0); break;
+			case DeriveeSW :
+				init_tab9( 0, 0,-1, 0, 1, 0, 0, 0, 0); break;
+
+			case Chapeau  : filtre_chapeau();  break;
+			case Gaussien : filtre_gaussien(); break;
+			default       : filtre_moyenne();  break;
+		}
+	}
+	
+	// constructeur par copie
+	FiltreLineaire(FiltreLineaire &K)
+	{
+		n = K.n;
+		UINT N = (2*n+1)*(2*n+1);
+		T = new float[N];
+		for (UINT i=0; i<N; i++)
+			T[i] = K.T[i];
+	}
+	
+	// affectation
+	FiltreLineaire& operator=(const FiltreLineaire &K)
+	{
+		if (this != &K)
+		{
+			delete[] T;
+			n = K.n;
+			UINT N = (2*n+1)*(2*n+1);
+			T = new float[N];
+			for (UINT i=0; i<N; i++)
+				T[i] = K.T[i];
+		}
+		return *this;
+	}
+	
+	// destructeur
+	~FiltreLineaire()
+	{
+		delete[] T;
+	}
+	
+	// acces à la valeur d'indice (i,j), -n <= i,j <= n
+	float operator()(int i, int j)
+	{
+		if (-i>n || -j>n || i>n || j>n) return 0.0;
+		return T[(i+n)+(2*n+1)*(j+n)];
+	}
+	
+	// renvoie la taille du filtre
+	UINT taille() { return n; }
+
+	// renvoie la dimension du filtre
+	UINT dimension() { return 2*n+1; }
+
+}; // class FiltreLineaire
+
+
+// calculer l'image résultat de la convolution de 
+// l'image I par le filtre linéaire de noyau K
+// Entrée : I = image de type ImageGrisF
+//          K = filtre linéaire
+// La fonction renvoie une image de meme dimension que I
+ImageGrisF convolution(ImageGrisF& I, FiltreLineaire K) 
+{
+	UINT L = I.largeur();
+	UINT H = I.hauteur();
+	ImageGrisF R(L,H);
+	int n = K.taille();
+	
+	for (int x=0; x<L; x++)
+	for (int y=0; y<H; y++)
+	{
+		float s = 0.0;
+		int k=0;
+		for (int i=-n; i<=n; i++)
+		for (int j=-n; j<=n; j++)
+		{
+			int xr = x+i;
+			int yr = y+j;
+			if (xr<0)  xr = 0;
+			if (xr>=L) xr = L-1;
+			if (yr<0)  yr = 0;
+			if (yr>=H) yr = H-1;
+			s = s+I(xr,yr)*K(i,j);
+		}
+		R(x,y) = s;
+	}
+	
+	return R;
+}	
+
+
+// seuillage automatique par la méthode de Otsu
+// Entrée : I = image en échelle de gris
+// La fonction renvoie l'image seuillée avec chaque pixel soit noir, soit blanc
+ImageGrisF seuillage_automatique(ImageGrisF &I)
+{
+	// nb de classes pour l'histogramme
+	UINT nc=256;
+	
+	// nombre de pixels de I
+	UINT N = I.nb_pixels();
+	
+	// calculer l'histogramme de I avec nc classes
+	Histogramme H(I,nc); 
+	
+	// calculer le seuil optimal
+    float sum = 0.0;
+    for (UINT i = 1; i < nc; i++)
+        sum += i * H.classe(i);
+    float sumB = 0.0;
+    float wB = 0.0;
+    float wF = 0.0;
+    float mB;
+    float mF;
+    float max = 0.0;
+    float between = 0.0;
+    float threshold1 = 0.0;
+    float threshold2 = 0.0;
+    for (UINT i = 0; i < 256; i++) 
+	{
+        wB += H.classe(i);
+        if (wB == 0.0)
+            continue;
+        wF = N - wB;
+        if (wF == 0.0)
+            break;
+        sumB += i * H.classe(i);
+        mB = sumB / wB;
+        mF = (sum - sumB) / wF;
+        between = wB * wF * (mB - mF)*(mB - mF);
+        if ( between >= max ) 
+		{
+            threshold1 = i;
+            if ( between > max ) 
+			{
+                threshold2 = i;
+            }
+            max = between;            
+        }
+    }
+    float s = ( threshold1 + threshold2 ) / 2.0;
+
+	// calcul de l'image seuillée
+	float seuil = (float)s/(float)nc;
+	printf("Seuillage methode de Otsu - seuil = %f\n", seuil); 
+	ImageGrisF Is(I);
+	for (UINT i=0; i<N; i++)
+	{
+		Is(i) = Is(i)<seuil ? 0.0 : 1.0;
+	}
+	
+	return Is;
+}
+
+// appliquer à l'image I le filtre dérivée à l'image I
+// méthode 1
+ImageGrisF filtre_derivee_methode1(ImageGrisF &I)
+{
+	UINT L = I.largeur();
+	UINT H = I.hauteur();
+	
+	ImageGrisF     I1, I2, I3, I4, I5, I6, I7, I8;
+	FiltreLineaire K1, K2, K3, K4, K5, K6, K7, K8;
+	
+	// appliquer le dégradé N
+	K1 = FiltreLineaire(FiltreLineaire::DeriveeN);
+	I1 = convolution(I,K1);  
+	
+	// appliquer le dégradé S
+	K2 = FiltreLineaire(FiltreLineaire::DeriveeS);
+	I2 = convolution(I,K2);  
+	
+	// appliquer le dégradé E
+	K3 = FiltreLineaire(FiltreLineaire::DeriveeE);
+	I3 = convolution(I,K3);  
+	
+	// appliquer le dégradé W
+	K4 = FiltreLineaire(FiltreLineaire::DeriveeW);
+	I4 = convolution(I,K4);  
+	
+	// appliquer le dégradé NE
+	K5 = FiltreLineaire(FiltreLineaire::DeriveeNE);
+	I5 = convolution(I,K5);  
+	
+	// appliquer le dégradé SE
+	K6 = FiltreLineaire(FiltreLineaire::DeriveeSE);
+	I6 = convolution(I,K6);  
+	
+	// appliquer le dégradé NW
+	K7 = FiltreLineaire(FiltreLineaire::DeriveeNW);
+	I7 = convolution(I,K7);  
+	
+	// appliquer le dégradé SW
+	K8 = FiltreLineaire(FiltreLineaire::DeriveeSW);
+	I8 = convolution(I,K8);  
+	
+	// calcul de l'image finale 
+	//                  1
+	// methode 1 : IR = - somme(k=1..8, |Ik|) 
+	//                  8
+	
+	// calcul de la somme
+	ImageGrisF IR(L,H,0.0);
+	I1 = abs(I1); IR += I1; 
+	I2 = abs(I2); IR += I2; 
+	I3 = abs(I3); IR += I3; 
+	I4 = abs(I4); IR += I4; 
+	I5 = abs(I5); IR += I5; 
+	I6 = abs(I6); IR += I6; 
+	I7 = abs(I7); IR += I7; 
+	I8 = abs(I8); IR += I8; 
+	
+	// multiplier par 1/8
+	IR *= 1.0/8.0;
+
+	return IR;
+}
+
+
+
+
+
+//////////////////////////////////////////////////////////////////////////////////
+//										//							
+//										//
+//	  Detection des droites contours par transformee de Hough.		//
+//										//
+//										//
+//////////////////////////////////////////////////////////////////////////////////
+
+
+// conversion d'une ImageGrisF en ImageCouleurF
+ImageCouleurF gris2rgb(ImageGrisF &I)
+{
+	UINT L = I.largeur();
+	UINT H = I.hauteur();
+	ImageCouleurF IC(L,H);
+	for (UINT i=0; i<L*H; i++)
+	{
+		float v = I(i);
+		IC(i) = RGBF(v,v,v);
+	}
+	return IC;
+}
+
+// tracer le pixel (x,y) dans l'image I avec la couleur c et l'épaisseur e
+template <typename Image, typename Couleur>
+void dessiner_pixel(Image &I, int x, int y, Couleur c, int e)
+{
+	for (int xe = x-e+1; xe<=x+e-1; xe++) 
+	for (int ye = y-e+1; ye<=y+e-1; ye++) 
+		I.pixel(xe,ye,c); 
+}
+
+
+// tracer le segment du pixel (x1,y1) au pixel (x2,y2)
+// dans l'image I avec la couleur c et l'épaisseur e
+template <typename Image, typename Couleur>
+void dessiner_segment(Image &I, int x1, int y1, int x2, int y2, Couleur c,
+int e)
+{
+// printf("dessiner_segment (%d,%d)-(%d,%d)\n", x1,y1,x2,y2);
+	int sx, sy, dx, dy;
+	if (x1<=x2)
+	{
+		sx = 1; dx = x2-x1;
+	}
+	else
+	{
+		sx = -1; dx = x1-x2;
+	}
+	if (y1<=y2)
+	{
+		sy = 1; dy = y2-y1;
+	}
+	else
+	{
+		sy = -1; dy = y1-y2;
+	}
+	
+	if (dx>=dy)
+	{	// boucle sur x
+	
+		// initialisation
+		int x = x1;
+		int y = y1;
+		int fP = 0;
+		int dfM  =   dx-2*dy;
+		int dfPcas1 = 2*dx-2*dy;
+		int dfPcas2 =     -2*dy;
+
+		while (x != x2)
+		{
+			// dessiner le pixel (x,y) avec la couleur c et l'épaisseur e
+			dessiner_pixel(I, x, y, c, e);
+			
+			// passer au pixel suivant
+			if (fP+dfM < 0)
+			{
+				y += sy;
+				fP += dfPcas1;
+			}
+			else
+			{
+				fP += dfPcas2;
+			}
+			x += sx;
+		}
+		// dessiner le pixel (x,y) avec la couleur c et l'épaisseur e
+		dessiner_pixel(I, x, y, c, e);
+	}
+	else
+	{	// boucle sur y
+	
+		// initialisation
+		int x = x1;
+		int y = y1;
+		int fP = 0;
+		int dfM  =   dy-2*dx;
+		int dfPcas1 = 2*dy-2*dx;
+		int dfPcas2 =     -2*dx;
+		
+		while (y != y2)
+		{
+			// dessiner le pixel (x,y) avec la couleur c et l'épaisseur e
+			dessiner_pixel(I, x, y, c, e);
+			
+			// passer au pixel suivant
+			if (fP+dfM < 0)
+			{
+				x += sx;
+				fP += dfPcas1;
+			}
+			else
+			{
+				fP += dfPcas2;
+			}
+			y += sy;
+		}
+		// dessiner le pixel (x,y) avec la couleur c et l'épaisseur e
+		dessiner_pixel(I, x, y, c, e);
+	}
+	
+}
+
+// tracer la droite avec la couleur coul et l'épaisseur e
+//   définie par (theta, alpha) dans l'image IC
+// la droite est -sin(theta)*(x-L/2)+cos(theta)*(y-H/2)=alpha
+void tracer_droite
+  (ImageCouleurF &IC, float theta, float alpha, RGBF coul, int e=1)
+{
+	float L = IC.largeur();
+	float H = IC.hauteur();
+	float D = sqrt(L*L+H*H);
+	float c = cos(theta);
+	float s = sin(theta);
+	alpha += 0.5*(H*c-L*s);
+	float x0 = -alpha*s;
+	float y0 =  alpha*c;
+	float x1 = x0-D*c;
+	float y1 = y0-D*s;
+	float x2 = x0+D*c;
+	float y2 = y0+D*s;
+	dessiner_segment(IC, (int)x1, (int)y1, (int)x2, (int)y2, coul, e);
+}
+
+// normaliser les valeurs de l'image I pour les ramener entre 0.0 et 1.0
+void normaliser(ImageGrisF &I)
+{
+	float min, max, d;
+	
+	//  calcul des valeurs min et max de I
+	min = max = I(0);
+	for (UINT i=1; i<I.nb_pixels(); i++)
+	{
+		if (min > I(i)) min = I(i);
+		if (max < I(i)) max = I(i);
+	}
+	
+	// normalisation
+	d = max-min;
+	for (UINT i=0; i<I.nb_pixels(); i++)
+		I(i) = d>0.0 ? (I(i)-min)/d : 0.0;
+	
+}
+
+
+
+///////////////////////////////////////////////////////////////////////////////
+// calcul de la transformee de Hough pour la détection de droite
+// de l'image I
+// Entrée : I = image en niveau de gris (valeur réelle)
+//          M, N = dimensions de l'image Transformée de Hough
+// La fonction renvoie une image de dimensions M x N
+// le pixel d'indice (X,Y) de cette image correspond à :
+// -- la valeur theta = theta_min + X*(theta_max-theta_min)/M
+// -- la valeur alpha = alpha_min + Y*(alpha_max-alpha_min)/N
+// avec : 
+//  theta_min = 0        theta_max = PI
+//  alpha_min = -D/2     alpha_max = D/2
+ImageGrisF transformee_hough(ImageGrisF &I, UINT M, UINT N)
+{
+    // dimensions de l'image I
+    UINT L = I.largeur();
+    UINT H = I.hauteur();
+    
+    // D : longueur de la diagonale de l'image I
+    float D = sqrt((float)L*(float)L+(float)H*(float)H);
+    
+    // création de l'image de la transformée de Hough
+    // de dimensions N x N et tous les pixels avec la valeur 0.0
+    ImageGrisF TH(M,N,0.0);
+    
+    // parcours de l'image I et traitement des pixels blancs (égaux à 1)
+    for (int X1 = 0; X1 < L; X1++)
+    for (int Y1 = 0; Y1 < H; Y1++)
+        if (I(X1,Y1)==1.0)
+        {
+            float x = X1-0.5*L;
+            float y = Y1-0.5*H;
+
+            for (int X2 = 0; X2 < M; ++X2)
+            {
+                float theta = (X2*M_PI)/M;
+                float alpha = -x*sin(theta)+y*cos(theta);
+                int Y2 = floor(N*(alpha+D/2)/D);
+                TH(X2,Y2) = TH(X2,Y2)+1;
+            }
+        }
+
+    normaliser(TH);
+    return TH;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+//           outils pour la recherche de maxima locaux                       //
+//           dans l'image de la transformée de Hough                         //
+///////////////////////////////////////////////////////////////////////////////
+
+// structure pour un pixel
+struct pixel_valeur {
+	UINT x,y; // coordonnées du pixel
+	float v;  // valeur du pixel
+};
+
+// fonction de comparaison de deux structures pixel_valeur
+// afin de pouvoir trier une séquence de pixel_valeur
+bool comp_pixel_valeur(pixel_valeur p1, pixel_valeur p2)
+{
+	return p1.v>p2.v;
+}
+
+// recherche les maxima locaux de l'image TH
+// Entree : TH = image "transformée de Hough" à valeurs réelles
+//          s = valeur seuil
+//          d = voisinage pour le calcul du max (par défaut d=1)
+// La fonction renvoie la séquence des maxima sous forme d'un vector
+//   de type pixel_valeur, triée par ordre décroissant
+// Ne sont pris en compte que les pixels de TH qui sont des maxima locaux
+//   et dont la valeur v est supérieure au seuil s
+// La distance d est utilisée pour le voisinage du maximum local
+// (x,y) est un maximum local de l'image TH si les deux conditions suivantes 
+//   sont vérifiées :
+//   (1) TH(x,y) >= s
+//   (2) pour tout k et l entre -d et d, TH(x,y) >= TH(x+k,y+l)
+vector<pixel_valeur> sequence_maxima_locaux(ImageGrisF &TH, float s, int d)
+{
+	vector<pixel_valeur> V;
+	
+	// retourner une liste vide si d<1
+	if (d<1) return V;
+	
+	int LT = TH.largeur();
+	int HT = TH.hauteur();
+	for (int x=0; x<LT; x++)
+	for (int y=0; y<HT; y++)
+	{
+		float v = TH(x,y);
+		if (v>=s)
+		{ 
+			// le pixel (x,y) a une valeur supérieure au seuil
+			// tester si ce pixel est un maximum local
+			// c'est à dire si
+			//  pour tout k et l entre -d et d, TH(x,y) >= TH(x+k,y+l)
+			bool est_maxi = true;
+			for (int dx=-d; dx<=d; dx++)
+			for (int dy=-d; dy<=d; dy++)
+			{
+				int x1 = x+dx;
+				int y1 = y+dy;
+				
+				// gestion du bord
+				if (x1<0)
+				{
+					x1 = x1+LT; y1 = HT-y1;
+				}
+				if (x1>=LT)
+				{
+					x1 = x1-LT; y1 = HT-y1;
+				}
+				
+				if (x1>=0 && x1<LT && y1>=0 && y1<HT)
+				{
+					if (v<TH(x1,y1)) est_maxi = false;
+				}
+			}
+		
+			if (est_maxi)
+			{
+				// ajouter le pixel (x,y) à la liste v
+				pixel_valeur pv = {x,y,v};
+				V.push_back(pv); // ajouter en fin de séquence 
+			}
+		}
+	}
+	
+	// tri de V par valeurs v décroissantes
+	sort(V.begin(), V.end(), comp_pixel_valeur);
+	return V;
+}
+
+
+///////////////////////////////////////////////////////////////////////////////
+//                          le programme principal                           //
+///////////////////////////////////////////////////////////////////////////////
+
+int main(int argc, char **argv)
+{
+
+	int num_f;
+	ImageGrisF I;
+	ImageGrisF I_F;
+	ImageGrisF I_S;
+	ImageGrisF I_F2, I_F3, I_F4 ;
+	ImageGrisF I_S2, I_S3, I_S4 ;
+	
+	// charger une image en niveaux de gris
+	if (argc<2)
+		I = ImageGrisF("campus.bmp");
+	else
+		I = ImageGrisF(argv[1]);
+
+	num_f = I.afficher();
+	changer_titre_fenetre_graphique(num_f, "Image Initiale");
+
+	// appliquer le filtre derivee - méthode 1
+	I_F = filtre_derivee_methode1(I);
+
+	// effectuer un seuillage automatique sur l'image filtree I_F
+	I_S = seuillage_automatique(I_F);
+	num_f = I_S.afficher();
+	changer_titre_fenetre_graphique(num_f, "Filtre Derivee + Seuillage");	
+
+
+	// calculer l'image TH de la transformée de Hough de l'image I
+	ImageGrisF TH;
+	UINT M=360; // discrétisation de la transformée de Hough pour theta
+	UINT N=400; // discrétisation de la transformée de Hough pour alpha
+	TH = transformee_hough(I_S,M,N);
+	normaliser(TH);
+
+	UINT L = I_S.largeur();    // largeur de l'image
+	UINT H = I_S.hauteur();    // hauteur de l'image
+	float D = sqrt(pow(L,2)+pow(H,2)); // diagonale de l'image
+
+	// calculer la sequence de maxima locaux
+	float seuil = 1.0/3.0;
+	int d = 10; 
+
+	vector<pixel_valeur> V = sequence_maxima_locaux(TH, seuil, d);
+	printf("Séquence des maxima local (taille = %ld) :\n", V.size());
+	
+	// representer les maxima locaux sur l'image TH comme des points rouges
+	// faire une copie de TH --> image couleur THC
+	ImageCouleurF THC;
+	THC = gris2rgb(TH);
+	RGBF Rouge(1.0,0.0,0.0);
+	UINT nb_max_admis = 10;
+	for (UINT i=0; i<V.size() && i<nb_max_admis; i++)
+	{
+		pixel_valeur pv = V[i];
+		dessiner_pixel(THC, pv.x, pv.y, Rouge, 3);
+	}
+	
+	// representer les droites correspondant aux maxima locaux sur l'image I 
+	// faire une copie de I --> image couleur IC
+	ImageCouleurF IC;
+	IC = gris2rgb(I_S);
+	for (UINT i=0; i<V.size() && i<nb_max_admis; i++)
+	{
+		pixel_valeur pv = V[i];
+		
+		// trouver les valeurs (theta,alpha) correspondant à (pv.x,pv.y)
+		float theta = M_PI*pv.x/M;
+		float alpha = -0.5*D+pv.y*D/N;
+		tracer_droite(IC, theta, alpha, Rouge, 2);
+	}
+	num_f = IC.afficher();
+	changer_titre_fenetre_graphique(num_f, "Detection Contours");	
+
+
+
+
+	// en attente de taper une touche
+	printf("Taper un caractere au clavier pour continuer");
+	getchar();
+
+	return 0;
+}
